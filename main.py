@@ -1,55 +1,63 @@
-import json
-
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
+from jwt import PyJWT
 from datetime import datetime, timedelta
 from pydantic import BaseModel
-from elasticsearch import Elasticsearch, RequestError
-from es_search import find_all, find_by_name
 from fastapi.middleware.cors import CORSMiddleware
 import random
+from supabase import create_client, Client
 
 JWT_SECRET_KEY = "5dd4e8585d1323d9d8e2a9d6f88c6ef319e1b52a2472e5baf0d3c18398ae9f2a"
 JWT_EXPIRATION_TIME = 2 * 60 * 60  # 2 hours in seconds
+USER_TABLE = "user_rto"
+RTO_TABLE = "rto"
+LINK_USER_RTO = "link_user_rto"
+
+supabase: Client = create_client("https://uuazcwidlitcmbusqzii.supabase.co", 
+                                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV1YXpjd2lkbGl0Y21idXNxemlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTE3NzA1MzMsImV4cCI6MjAwNzM0NjUzM30.rQoRVUDDEPOJDPeP-K6fNw3o6kJ5X5LUsCQPxqxuo8Q")
 
 
 class User(BaseModel):
-    name: str
-    surname: str
-    mechanographicCode: str
+    nome: str
+    cognome: str
+    codiceMeccanografico: str
+    email: str
+    codiceCategoria: str
+    categoriaEstesa: str
+    selezionabile: bool
+    qualifica: str
+
 
 class AuthenticatedUser:
-    name: str
-    surname: str
-    mechanographicCode: str
+    nome: str
+    cognome: str
+    codiceMeccanografico: str
+    email: str
+    codiceCategoria: str
+    categoriaEstesa: str
+    selezionabile: bool
+    qualifica: str
     token: str
 
 class RTOJustification(BaseModel):
     motivation: str
     motivation_description: str
-    user: User
-
+    codiceMeccanografico: str
 
 class RTO(BaseModel):
-    date: str
-    description: str
-    users: list
-    justifications: list
-    qrcode: str
+    dataRTO: str
+    descrizione: str
+    codiciCategoria: list[str]
+    categorieEstese: list[str]
 
+class LinkUserRTO(BaseModel):
+    user_id: int
+    rto_id: int
+    statoUtente: str
+    descrizioneGiustifica: str
+    motivo: str
 
-es = Elasticsearch(
-    hosts=['http://localhost:9200'],
-    basic_auth=('elastic', 'e0_kX+xT1Oh_v+8pLot3')
-)
-
-
-def es_create_index_if_not_exists(es, index):
-    try:
-        es.indices.create(index=index)
-    except RequestError as ex:
-        print(ex)
 
 app = FastAPI()
 security = HTTPBearer()
@@ -69,7 +77,7 @@ app.add_middleware(
 def generate_jwt_token(mechanographic_code: str) -> str:
     expiration_time = datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME)
     payload = {
-        "mechanographicCode": mechanographic_code,
+        "codiceMeccanografico": mechanographic_code,
         "exp": expiration_time,
     }
     token = jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
@@ -93,25 +101,30 @@ async def test_endpoint():
 
 @app.get("/verify")
 async def veriy_me(payload: dict = Depends(verify_token)):
-    print({"mechanographicCode": payload.get("mechanographicCode")})
-    return {"mechanographicCode": payload.get("mechanographicCode")}
+    return {"codiceMeccanografico": payload.get("codiceMeccanografico")}
 
 
 @app.get("/users")
 async def find_all_users():
-    users = find_all(es, "aia_mn_users")
-    return users
+    users = supabase.table(USER_TABLE).select("*").execute()
+    return users.data
 
 
-@app.get("/users/{mechanographicCode}")
-async def find_user_by_name(mechanographicCode: str):
-    user = find_by_name(es, "aia_mn_users", "mechanographicCode", mechanographicCode)
+@app.get("/users/{codiceMeccanografico}")
+async def find_user_by_name(codiceMeccanografico: str):
+    user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", codiceMeccanografico).execute().data
     if user is not None:
-        token = generate_jwt_token(mechanographicCode)
+        user = user[0]
+        token = generate_jwt_token(codiceMeccanografico)
         response = AuthenticatedUser()
-        response.name = user["name"]
-        response.surname = user["surname"]
-        response.mechanographicCode = user["mechanographicCode"]
+        response.nome = user["nome"]
+        response.cognome = user["cognome"]
+        response.codiceMeccanografico = str(user["codiceMeccanografico"])
+        response.categoriaEstesa = user['categoriaEstesa']
+        response.codiceCategoria = user['codiceCategoria']
+        response.email = user['email']
+        response.qualifica = user['qualifica']
+        response.selezionabile = user['selezionabile']
         response.token = token
         return response
     return None
@@ -119,140 +132,121 @@ async def find_user_by_name(mechanographicCode: str):
 
 @app.post("/users")
 async def create_user(user: User):
-    if not es.indices.exists(index="aia_mn_users"):
-        print(f"Index users created")
-        es_create_index_if_not_exists(es, "aia_mn_users")
-    actions = []
-    action = {"index": {"_index": "aia_mn_users", "_id": user.mechanographicCode}, "_op_type": "upsert"}
-    user = {"mechanographicCode": user.mechanographicCode, "name": user.name, "surname": user.surname}
-    doc = json.dumps(user)
-    actions.append(action)
-    actions.append(doc)
-    res = es.bulk(index="aia_mn_users", operations=actions)
-    print(res)
-    return user
+    user = {"codiceMeccanografico": user.codiceMeccanografico, "nome": user.nome, "cognome": user.cognome,
+            "email": user.email, "codiceCategoria": user.codiceCategoria, "categoriaEstesa": user.categoriaEstesa,
+            "qualifica": user.qualifica, "selezionabile": user.selezionabile}
+    data, _ = supabase.table(USER_TABLE).upsert(user).execute()
+    return data
 
-@app.get("/users/delete/{mechanographicCode}")
-async def delete_user_by_code(mechanographicCode: str, payload: dict = Depends(verify_token)):
-    es.delete(index="aia_mn_users", id=mechanographicCode)
+@app.get("/users/delete/{codiceMeccanografico}")
+async def delete_user_by_code(codiceMeccanografico: str, payload: dict = Depends(verify_token)):
+    data = supabase.table(USER_TABLE).delete().eq("codiceMeccanografico", codiceMeccanografico)
     return {"msg": "Deleted"}
 
 
 @app.post("/rtos")
 async def create_rto(rto: RTO):
-    if not es.indices.exists(index="rtos"):
-        print(f"Index rtos created")
-        es_create_index_if_not_exists(es, "rtos")
-    actions = []
-    action = {"index": {"_index": "rtos", "_id": rto.date}, "_op_type": "upsert"}
     # Create the qrcode for the rto
     qrcode = str(random.randint(0, 99999)).zfill(5)
-    rto = {"date": rto.date, "description": rto.description, "users": [], "justifications": [], "qrcode": qrcode}
-    doc = json.dumps(rto)
-    actions.append(action)
-    actions.append(doc)
-    res = es.bulk(index="rtos", operations=actions)
-    print(res)
-    return rto
+    rto = {"dataRTO": rto.dataRTO, "descrizione": rto.descrizione, "qrcode": qrcode,
+            "codiciCategoria": rto.codiciCategoria, "categorieEstese": rto.categorieEstese}
+    data, _ = supabase.table(RTO_TABLE).upsert(rto).execute()
+    print(data[1][0])
+    return data[1][0]
 
 
 @app.post("/rtos/users/{rto_date}")
 async def add_user_to_rto(rto_date: str, user: User, payload: dict = Depends(verify_token)):
-    rto = find_by_name(es, "rtos", "date", rto_date)
-    users = rto['users']
-    print(users)
-    user = {"name": user.name, "surname": user.surname, "mechanographicCode": user.mechanographicCode}
+    rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute().data[0]
+    found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", user.codiceMeccanografico).execute().data[0]
+    print(rto)
+    print(found_user)
+    response = supabase.table(LINK_USER_RTO).select("*").eq("codiceMeccanografico", found_user['codiceMeccanografico'])\
+                                                        .eq("dataRTO", rto['dataRTO']).execute().data
     found = False
-    for rtoUser in users:
-        if user["mechanographicCode"] == rtoUser["mechanographicCode"]:
-            found = True
-    if not found:
-        users.append(user)
-    else:
+    if len(response) > 0:
+        found = True
+    if found:
         print(f"The user {user['name']} is already registered to this RTO")
-    actions = []
-    action = {"index": {"_index": "rtos", "_id": rto["date"]}, "_op_type": "upsert"}
-    rto = {"date": rto["date"], "description": rto["description"], "users": users, "justifications": rto["justifications"],
-            "qrcode": rto["qrcode"]}
-    doc = json.dumps(rto)
-    actions.append(action)
-    actions.append(doc)
-    res = es.bulk(index="rtos", operations=actions)
-    print(res)
-    return find_by_name(es, "rtos", "date", rto_date)
+        return response
+    else:
+        data, _ = supabase.table(LINK_USER_RTO)\
+                    .upsert({"codiceMeccanografico": found_user['codiceMeccanografico'], "dataRTO": rto['dataRTO'], 
+                            "statoUtente":"PRESENTE", "descrizioneGiustifica": "", "motivo": ""})\
+                    .execute()
+        print(data[0][1])
+        return data[0][1]
+
+@app.get("/rtos/justifications/{codiceMeccanografico}")
+async def get_justifications_of_user(codiceMeccanografico: int):
+    giustifiche = supabase.table(LINK_USER_RTO).select("dataRTO, statoUtente, descrizioneGiustifica, motivo")\
+                                                .eq("codiceMeccanografico", codiceMeccanografico)\
+                                                .execute()
+    print(giustifiche.data)
+    return giustifiche.data
 
 @app.post("/rtos/justifications/{rto_date}")
 async def add_justification_to_rto(rto_date: str, rto_justification: RTOJustification, payload: dict = Depends(verify_token)):
-    rto = find_by_name(es, "rtos", "date", rto_date)
-    justifications = rto['justifications']
-    print(rto_justification)
-    user = rto_justification.user
-    user = {"name": user.name, "surname": user.surname, "mechanographicCode": user.mechanographicCode}
-    justification_user = rto_justification.user
-    rto_justification = {"motivation": rto_justification.motivation, "motivation_description": rto_justification.motivation_description,
-                        "user": {"name": justification_user.name, "surname": justification_user.surname, "mechanographicCode": justification_user.mechanographicCode}}
-    found = False
-    for justification in justifications:
-        if user["mechanographicCode"] == justification["user"]["mechanographicCode"]:
-            found = True
-    if not found:
-        justifications.append(rto_justification)
-    else:
-        print(f"The user {user['name']} is already justified to this RTO")
-        return None
-    actions = []
-    action = {"index": {"_index": "rtos", "_id": rto["date"]}, "_op_type": "upsert"}
-    rto = {"date": rto["date"], "description": rto["description"], "users": rto["users"], "justifications": justifications,
-            "qrcode": rto["qrcode"]}
-    doc = json.dumps(rto)
-    actions.append(action)
-    actions.append(doc)
-    res = es.bulk(index="rtos", operations=actions)
-    print(res)
-    return find_by_name(es, "rtos", "date", rto_date)
+    rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute().data[0]
+    found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico",
+                                                            rto_justification.codiceMeccanografico).execute().data[0]
+    print(rto)
+    print(found_user)
+    response = supabase.table(LINK_USER_RTO).select("*").eq("codiceMeccanografico", found_user['codiceMeccanografico'])\
+                                            .eq("dataRTO", rto['dataRTO']).execute().data
+    if len(response) == 0:
+        data, _ = supabase.table(LINK_USER_RTO)\
+                    .upsert({"codiceMeccanografico": found_user['codiceMeccanografico'], "dataRTO": rto['dataRTO'],
+                            "statoUtente": 'ASSENTE GIUSTIFICATO',
+                            "descrizioneGiustifica": rto_justification.motivation_description,
+                            'motivo': rto_justification.motivation})\
+                    .execute()
+        print(data)
+        return supabase.table(LINK_USER_RTO).select("dataRTO, statoUtente, descrizioneGiustifica, motivo")\
+                                                .eq("codiceMeccanografico", rto_justification.codiceMeccanografico)\
+                                                .execute()
+    return None
 
 
 @app.get("/rtos")
 async def find_all_rtos():
-    if es.indices.exists(index="rtos"):
-        rtos = find_all(es, "rtos")
-        return rtos
-    return {"error": "index rtos does not exist"}
+    rtos = supabase.table(RTO_TABLE).select("*").execute()
+    return rtos.data
 
 
 @app.get("/rtos/{rto_date}")
 async def find_rto_by_date(rto_date: str, payload: dict = Depends(verify_token)):
-    rto = find_by_name(es, "rtos", "date", rto_date)
-    return rto
+    rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
+    print(rto.data)
+    return rto.data
 
 @app.get("/rtos/{qrcode}")
 async def find_rto_by_qrcode(qrcode: str, payload: dict = Depends(verify_token)):
-    rto = find_by_name(es, "rtos", "qrcode", qrcode)
+    rto = supabase.table(RTO_TABLE).select("*").eq("qrcode", qrcode).execute()
+    print(rto)
     return rto
 
 
 @app.get("/rtos/delete/{rto_date}")
-async def delete_wish_list_by_name(rto_date: str):
-    es.delete(index="rtos", id=rto_date)
-    return {"msg": "Deleted"}
+async def delete_rto_by_date(rto_date: str):
+    rto_to_delete = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
+    if len(rto_to_delete.data) > 0:
+        links_deleted = supabase.table(LINK_USER_RTO).delete().eq("dataRTO", rto_to_delete.data[0]["dataRTO"]).execute()
+        data = supabase.table(RTO_TABLE).delete().eq("dataRTO", rto_date).execute()
+        print(data, links_deleted)
+        return {"msg": "Deleted"}
+    return {"msg": "RTO to delete does not exist"}
 
 
-@app.get("/rtos/delete/user/{rto_date}/{mechanographicCode}")
-async def delete_user_from_list(rto_date: str, mechanographicCode: str):
-    rto = find_by_name(es, "rtos", "date", rto_date)
-    users = rto['users']
-    for user in users:
-        if user["mechanographicCode"] == mechanographicCode:
-            print(user)
-            users.remove(user)
-            break
-    actions = []
-    action = {"index": {"_index": "rtos", "_id": rto_date}, "_op_type": "upsert"}
-    rto = {"date": rto["date"], "description": rto["description"], "users": users, "justifications": rto["justifications"],
-            "qrcode": rto["qrcode"]}
-    doc = json.dumps(rto)
-    actions.append(action)
-    actions.append(doc)
-    res = es.bulk(index="rtos", operations=actions)
-    print(res)
-    return find_by_name(es, "rtos", "date", rto_date)
+@app.get("/rtos/delete/user/{rto_date}/{codiceMeccanografico}")
+async def delete_user_from_rto(rto_date: str, codiceMeccanografico: str):
+    rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
+    found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", codiceMeccanografico).execute()
+    query = f"""
+    DELETE
+    FROM {LINK_USER_RTO}
+    WHERE codiceMeccanografico = {found_user.codiceMeccanografico}
+        AND dataRTO = {rto.dataRTO}
+    """
+    response = supabase.sql(query)
+    return response
