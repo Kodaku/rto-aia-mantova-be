@@ -7,6 +7,9 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import random
 from supabase import create_client, Client
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
+from pathlib import Path
 
 JWT_SECRET_KEY = "5dd4e8585d1323d9d8e2a9d6f88c6ef319e1b52a2472e5baf0d3c18398ae9f2a"
 JWT_EXPIRATION_TIME = 2 * 60 * 60  # 2 hours in seconds
@@ -62,6 +65,12 @@ class LinkUserRTO(BaseModel):
 app = FastAPI()
 security = HTTPBearer()
 
+app.mount("/static", StaticFiles(directory="build/static"), name="build")
+app.mount("/bootstrap-italia", StaticFiles(directory="build/bootstrap-italia"), name="bootstrap-italia")
+
+# app.mount("/static", StaticFiles(directory="static/static"), name="static")
+# app.mount("/bootstrap-italia2", StaticFiles(directory="static/bootstrap-italia"), name="bootstrap-italia2")
+
 origins = [
     "*",
 ]
@@ -95,9 +104,17 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+@app.get("/giustifiche")
+async def read_root():
+    # Assuming "index.html" is your main HTML file in the React build
+    html_path = Path("build/index.html")
+    return FileResponse(html_path)
+
 @app.get("/")
-async def test_endpoint():
-    return {"message": "Hello!"}
+async def read_root():
+    # Assuming "index.html" is your main HTML file in the React build
+    html_path = Path("build/presenze.html")
+    return FileResponse(html_path)
 
 @app.get("/verify")
 async def veriy_me(payload: dict = Depends(verify_token)):
