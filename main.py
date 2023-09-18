@@ -103,30 +103,30 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-@app.get("/giustifiche")
+@app.get("/aia/giustifiche")
 async def read_root():
     # Assuming "index.html" is your main HTML file in the React build
     html_path = Path("build/index.html")
     return FileResponse(html_path)
 
-@app.get("/")
+@app.get("/aia")
 async def read_root():
     # Assuming "index.html" is your main HTML file in the React build
     html_path = Path("build/presenze.html")
     return FileResponse(html_path)
 
-@app.get("/verify")
+@app.get("/aia/verify")
 async def veriy_me(payload: dict = Depends(verify_token)):
     return {"codiceMeccanografico": payload.get("codiceMeccanografico")}
 
 
-@app.get("/users")
+@app.get("/aia/users")
 async def find_all_users():
     users = supabase.table(USER_TABLE).select("*").execute()
     return users.data
 
 
-@app.get("/users/{codiceMeccanografico}")
+@app.get("/aia/users/{codiceMeccanografico}")
 async def find_user_by_name(codiceMeccanografico: str):
     user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", codiceMeccanografico).execute().data
     if user is not None:
@@ -146,7 +146,7 @@ async def find_user_by_name(codiceMeccanografico: str):
     return None
 
 
-@app.post("/users")
+@app.post("/aia/users")
 async def create_user(user: User):
     user = {"codiceMeccanografico": user.codiceMeccanografico, "nome": user.nome, "cognome": user.cognome,
             "email": user.email, "codiceCategoria": user.codiceCategoria, "categoriaEstesa": user.categoriaEstesa,
@@ -154,13 +154,13 @@ async def create_user(user: User):
     data, _ = supabase.table(USER_TABLE).upsert(user).execute()
     return data
 
-@app.get("/users/delete/{codiceMeccanografico}")
+@app.get("/aia/users/delete/{codiceMeccanografico}")
 async def delete_user_by_code(codiceMeccanografico: str, payload: dict = Depends(verify_token)):
     data = supabase.table(USER_TABLE).delete().eq("codiceMeccanografico", codiceMeccanografico)
     return {"msg": "Deleted"}
 
 
-@app.post("/rtos")
+@app.post("/aia/rtos")
 async def create_rto(rto: RTO):
     # Create the qrcode for the rto
     qrcode = str(random.randint(0, 99999)).zfill(5)
@@ -171,7 +171,7 @@ async def create_rto(rto: RTO):
     return data[1][0]
 
 
-@app.post("/rtos/users/{rto_date}")
+@app.post("/aia/rtos/users/{rto_date}")
 async def add_user_to_rto(rto_date: str, user: User, payload: dict = Depends(verify_token)):
     rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute().data[0]
     found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", user.codiceMeccanografico).execute().data[0]
@@ -193,7 +193,7 @@ async def add_user_to_rto(rto_date: str, user: User, payload: dict = Depends(ver
         print(data[0][1])
         return data[0][1]
 
-@app.get("/rtos/justifications/{codiceMeccanografico}")
+@app.get("/aia/rtos/justifications/{codiceMeccanografico}")
 async def get_justifications_of_user(codiceMeccanografico: int):
     giustifiche = supabase.table(LINK_USER_RTO).select("dataRTO, statoUtente, descrizioneGiustifica, motivo")\
                                                 .eq("codiceMeccanografico", codiceMeccanografico)\
@@ -201,7 +201,7 @@ async def get_justifications_of_user(codiceMeccanografico: int):
     print(giustifiche.data)
     return giustifiche.data
 
-@app.post("/rtos/justifications/{rto_date}")
+@app.post("/aia/rtos/justifications/{rto_date}")
 async def add_justification_to_rto(rto_date: str, rto_justification: RTOJustification, payload: dict = Depends(verify_token)):
     rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute().data[0]
     found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico",
@@ -224,26 +224,26 @@ async def add_justification_to_rto(rto_date: str, rto_justification: RTOJustific
     return None
 
 
-@app.get("/rtos")
+@app.get("/aia/rtos")
 async def find_all_rtos():
     rtos = supabase.table(RTO_TABLE).select("*").execute()
     return rtos.data
 
 
-@app.get("/rtos/{rto_date}")
+@app.get("/aia/rtos/{rto_date}")
 async def find_rto_by_date(rto_date: str, payload: dict = Depends(verify_token)):
     rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
     print(rto.data)
     return rto.data
 
-@app.get("/rtos/{qrcode}")
+@app.get("/aia/rtos/{qrcode}")
 async def find_rto_by_qrcode(qrcode: str, payload: dict = Depends(verify_token)):
     rto = supabase.table(RTO_TABLE).select("*").eq("qrcode", qrcode).execute()
     print(rto)
     return rto
 
 
-@app.get("/rtos/delete/{rto_date}")
+@app.get("/aia/rtos/delete/{rto_date}")
 async def delete_rto_by_date(rto_date: str):
     rto_to_delete = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
     if len(rto_to_delete.data) > 0:
@@ -254,7 +254,7 @@ async def delete_rto_by_date(rto_date: str):
     return {"msg": "RTO to delete does not exist"}
 
 
-@app.get("/rtos/delete/user/{rto_date}/{codiceMeccanografico}")
+@app.get("/aia/rtos/delete/user/{rto_date}/{codiceMeccanografico}")
 async def delete_user_from_rto(rto_date: str, codiceMeccanografico: str):
     rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute()
     found_user = supabase.table(USER_TABLE).select("*").eq("codiceMeccanografico", codiceMeccanografico).execute()
