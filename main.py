@@ -9,6 +9,11 @@ from supabase import create_client, Client
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 from pathlib import Path
+import json
+import base64
+import hmac
+import hashlib
+from datetime import datetime, timedelta
 
 JWT_SECRET_KEY = "5dd4e8585d1323d9d8e2a9d6f88c6ef319e1b52a2472e5baf0d3c18398ae9f2a"
 JWT_EXPIRATION_TIME = 2 * 60 * 60  # 2 hours in seconds
@@ -83,18 +88,63 @@ app.add_middleware(
 )
 
 def generate_jwt_token(mechanographic_code: str) -> str:
-    expiration_time = datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME)
+    # Payload data
     payload = {
+        "exp": datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME),  # Expiration time
         "codiceMeccanografico": mechanographic_code,
-        "exp": expiration_time,
     }
-    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
-    return token
+
+    # Encode the payload as a JSON string
+    encoded_payload = json.dumps(payload, separators=(",", ":")).encode()
+
+    # Base64 URL-safe encoding of the payload
+    encoded_payload_base64 = base64.urlsafe_b64encode(encoded_payload).rstrip(b"=")
+
+    # Create a signature using HMAC-SHA256
+    signature = hmac.new(JWT_SECRET_KEY.encode(), encoded_payload_base64, hashlib.sha256)
+    encoded_signature = base64.urlsafe_b64encode(signature.digest()).rstrip(b"=")
+
+    # Combine the encoded payload and signature with a period '.'
+    jwt_token = f"{encoded_payload_base64.decode()}.{encoded_signature.decode()}"
+    # expiration_time = datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME)
+    # payload = {
+    #     "codiceMeccanografico": mechanographic_code,
+    #     "exp": expiration_time,
+    # }
+    # token = jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
+    return jwt_token
+
+def decode_jwt(jwt_token, secret_key):
+    try:
+        # Split the JWT into its parts (header, payload, and signature)
+        header, payload, signature = jwt_token.split(".")
+
+        # Base64 URL-safe decoding of the header and payload
+        # decoded_header = base64.urlsafe_b64decode(header.encode() + b'=' * (4 - len(header) % 4))
+        decoded_payload = base64.urlsafe_b64decode(payload.encode() + b'=' * (4 - len(payload) % 4))
+
+        # Load the JSON data from the decoded payload
+        decoded_payload_data = json.loads(decoded_payload)
+
+        # Verify the signature
+        expected_signature = base64.urlsafe_b64encode(
+            hmac.new(secret_key.encode(), header.encode() + b'.' + payload.encode(), hashlib.sha256).digest()
+        ).rstrip(b'=')
+
+        if signature.encode() != expected_signature:
+            return None  # Signature verification failed
+
+        return decoded_payload_data
+    except (ValueError, json.JSONDecodeError, KeyError):
+        return None  # Invalid token or payload
+    
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     try:
         token = credentials.credentials
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+        payload = decode_jwt(token, JWT_SECRET_KEY)
+        payload = json.dumps(payload)
+        # payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
         expiration_time = datetime.fromtimestamp(payload["exp"])
         if datetime.utcnow() > expiration_time:
             raise HTTPException(status_code=401, detail="Token has expired")
