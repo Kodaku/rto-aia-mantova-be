@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import jwt
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,24 +87,25 @@ app.add_middleware(
 )
 
 def generate_jwt_token(mechanographic_code: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
     # Payload data
     payload = {
-        "exp": datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME),  # Expiration time
+        "exp": int((datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME)).timestamp()),  # Expiration time
         "codiceMeccanografico": mechanographic_code,
     }
 
-    # Encode the payload as a JSON string
-    encoded_payload = json.dumps(payload, separators=(",", ":")).encode()
+    encoded_header = base64.urlsafe_b64encode(json.dumps(header, separators=(",", ":")).encode()).decode()
+    encoded_payload = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
 
-    # Base64 URL-safe encoding of the payload
-    encoded_payload_base64 = base64.urlsafe_b64encode(encoded_payload).rstrip(b"=")
+    # Combine the encoded header and payload with a period '.'
+    encoded_token = f"{encoded_header}.{encoded_payload}"
 
-    # Create a signature using HMAC-SHA256
-    signature = hmac.new(JWT_SECRET_KEY.encode(), encoded_payload_base64, hashlib.sha256)
-    encoded_signature = base64.urlsafe_b64encode(signature.digest()).rstrip(b"=")
+    # Sign the token with the secret key using HMAC-SHA256
+    signature = hmac.new(JWT_SECRET_KEY.encode(), encoded_token.encode(), hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode()
 
-    # Combine the encoded payload and signature with a period '.'
-    jwt_token = f"{encoded_payload_base64.decode()}.{encoded_signature.decode()}"
+    # Combine the token and signature with a period '.'
+    jwt_token = f"{encoded_token}.{encoded_signature}"
     # expiration_time = datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION_TIME)
     # payload = {
     #     "codiceMeccanografico": mechanographic_code,
@@ -116,41 +116,38 @@ def generate_jwt_token(mechanographic_code: str) -> str:
 
 def decode_jwt(jwt_token, secret_key):
     try:
-        # Split the JWT into its parts (header, payload, and signature)
-        header, payload, signature = jwt_token.split(".")
+        # Split the token into its parts (header, payload, and signature)
+        encoded_header, encoded_payload, signature = jwt_token.split(".")
 
-        # Base64 URL-safe decoding of the header and payload
-        # decoded_header = base64.urlsafe_b64decode(header.encode() + b'=' * (4 - len(header) % 4))
-        decoded_payload = base64.urlsafe_b64decode(payload.encode() + b'=' * (4 - len(payload) % 4))
+        # Decode the header and payload from Base64 URL-safe strings
+        header = json.loads(base64.urlsafe_b64decode(encoded_header.encode()).decode())
+        payload = json.loads(base64.urlsafe_b64decode(encoded_payload.encode()).decode())
 
-        # Load the JSON data from the decoded payload
-        decoded_payload_data = json.loads(decoded_payload)
+        # Verify the signature by re-signing the header and payload
+        re_signature = hmac.new(secret_key.encode(), f"{encoded_header}.{encoded_payload}".encode(), hashlib.sha256).digest()
+        re_encoded_signature = base64.urlsafe_b64encode(re_signature).decode()
 
-        # Verify the signature
-        expected_signature = base64.urlsafe_b64encode(
-            hmac.new(secret_key.encode(), header.encode() + b'.' + payload.encode(), hashlib.sha256).digest()
-        ).rstrip(b'=')
-
-        if signature.encode() != expected_signature:
+        if re_encoded_signature != signature:
             return None  # Signature verification failed
 
-        return decoded_payload_data
+        return payload
     except (ValueError, json.JSONDecodeError, KeyError):
         return None  # Invalid token or payload
     
+    
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    try:
-        token = credentials.credentials
-        payload = decode_jwt(token, JWT_SECRET_KEY)
-        payload = json.dumps(payload)
-        # payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
-        expiration_time = datetime.fromtimestamp(payload["exp"])
-        if datetime.utcnow() > expiration_time:
-            raise HTTPException(status_code=401, detail="Token has expired")
-        return payload
-    except (jwt.DecodeError, jwt.ExpiredSignatureError):
-        raise HTTPException(status_code=401, detail="Invalid token")
+    token = credentials.credentials
+    payload = decode_jwt(token, JWT_SECRET_KEY)
+    # print(payload)
+    # payload = json.dumps(payload)
+    print(payload)
+    # payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+    expiration_time = datetime.fromtimestamp(payload["exp"])
+    if datetime.utcnow() > expiration_time:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    return payload
+    
 
 
 @app.get("/giustifiche")
@@ -213,8 +210,12 @@ async def delete_user_by_code(codiceMeccanografico: str, payload: dict = Depends
 @app.post("/rtos")
 async def create_rto(rto: RTO):
     # Create the qrcode for the rto
-    qrcode = str(random.randint(0, 99999)).zfill(5)
-    rto = {"dataRTO": rto.dataRTO, "descrizione": rto.descrizione, "qrcode": qrcode,
+    users = supabase.table(USER_TABLE).select("*").execute().data
+    qrcodes = {}
+    for user in users:
+        qrcode = str(random.randint(0, 99999)).zfill(5)
+        qrcodes[user["codiceMeccanografico"]] = qrcode
+    rto = {"dataRTO": rto.dataRTO, "descrizione": rto.descrizione, "qrcodes": qrcodes,
             "codiciCategoria": rto.codiciCategoria, "categorieEstese": rto.categorieEstese}
     data, _ = supabase.table(RTO_TABLE).upsert(rto).execute()
     print(data[1][0])
@@ -286,11 +287,20 @@ async def find_rto_by_date(rto_date: str, payload: dict = Depends(verify_token))
     print(rto.data)
     return rto.data
 
-@app.get("/rtos/{qrcode}")
-async def find_rto_by_qrcode(qrcode: str, payload: dict = Depends(verify_token)):
-    rto = supabase.table(RTO_TABLE).select("*").eq("qrcode", qrcode).execute()
+@app.get("/rtos/{rto_date}/{codiceMeccanografico}/{qrcode}")
+async def find_rto_by_qrcode(rto_date: str, codiceMeccanografico: int, qrcode: str, payload: dict = Depends(verify_token)):
+    rto = supabase.table(RTO_TABLE).select("*").eq("dataRTO", rto_date).execute().data[0]
     print(rto)
-    return rto
+    found = False
+    if rto is not None:
+        qrcodes = rto['qrcodes']
+        if str(codiceMeccanografico) in qrcodes:
+            print("Codice meccanografico presente")
+            if qrcodes[str(codiceMeccanografico)] == qrcode:
+                found = True
+    if found:
+        return rto
+    return None
 
 
 @app.get("/rtos/delete/{rto_date}")
