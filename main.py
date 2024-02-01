@@ -68,8 +68,8 @@ class LinkUserRTO(BaseModel):
 app = FastAPI()
 security = HTTPBearer()
 
-app.mount("/static", StaticFiles(directory="build/static"), name="build")
-app.mount("/bootstrap-italia", StaticFiles(directory="build/bootstrap-italia"), name="bootstrap-italia")
+# app.mount("/static", StaticFiles(directory="build/static"), name="build")
+# app.mount("/bootstrap-italia", StaticFiles(directory="build/bootstrap-italia"), name="bootstrap-italia")
 
 # app.mount("/static", StaticFiles(directory="static/static"), name="static")
 # app.mount("/bootstrap-italia2", StaticFiles(directory="static/bootstrap-italia"), name="bootstrap-italia2")
@@ -150,17 +150,17 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
     
 
 
-@app.get("/giustifiche")
-async def read_root():
-    # Assuming "index.html" is your main HTML file in the React build
-    html_path = Path("build/index.html")
-    return FileResponse(html_path)
+# @app.get("/giustifiche")
+# async def read_root():
+#     # Assuming "index.html" is your main HTML file in the React build
+#     html_path = Path("build/index.html")
+#     return FileResponse(html_path)
 
-@app.get("/")
-async def read_root():
-    # Assuming "index.html" is your main HTML file in the React build
-    html_path = Path("build/presenze.html")
-    return FileResponse(html_path)
+# @app.get("/")
+# async def read_root():
+#     # Assuming "index.html" is your main HTML file in the React build
+#     html_path = Path("build/presenze.html")
+#     return FileResponse(html_path)
 
 @app.get("/verify")
 async def veriy_me(payload: dict = Depends(verify_token)):
